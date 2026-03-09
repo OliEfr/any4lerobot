@@ -154,7 +154,7 @@ If you find this repository helpful in your research or projects, please conside
 ```bibtex
 @misc{any4lerobot,
   title        = {Any4LeRobot: A tool collection for LeRobot},
-  author       = {Qizhi Chen},
+  author       = {Qizhi Chen, Dong Wang, Bin Zhao},
   license      = {MIT},
   url          = {https://github.com/Tavish9/any4lerobot},
   year         = {2025},
