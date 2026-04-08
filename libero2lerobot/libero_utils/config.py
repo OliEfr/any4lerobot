@@ -29,6 +29,21 @@ LIBERO_FEATURES = {
         "shape": (2,),
         "names": {"motors": ["gripper", "gripper"]},
     },
+    # "observation.images.frontview_image": {
+    #     "dtype": "video",
+    #     "shape": (256, 256, 3),
+    #     "names": ["height", "width", "rgb"],
+    # },
+    # "observation.images.birdview_image": {
+    #     "dtype": "video",
+    #     "shape": (256, 256, 3),
+    #     "names": ["height", "width", "rgb"],
+    # },
+    # "observation.images.sideview_image": {
+    #     "dtype": "video",
+    #     "shape": (256, 256, 3),
+    #     "names": ["height", "width", "rgb"],
+    # },
     "action": {
         "dtype": "float32",
         "shape": (7,),

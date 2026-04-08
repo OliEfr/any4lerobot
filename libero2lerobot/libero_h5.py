@@ -4,28 +4,14 @@ import re
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import ray
 from datatrove.executor import LocalPipelineExecutor, RayPipelineExecutor
 from datatrove.pipeline.base import PipelineStep
-from lerobot.datasets import LeRobotDataset, LeRobotDatasetMetadata
-from lerobot.datasets.aggregate import (
-    aggregate_data,
-    aggregate_metadata,
-    aggregate_stats,
-    aggregate_videos,
-    validate_all_metadata,
-)
-from lerobot.datasets.io_utils import write_info, write_stats, write_tasks
-from lerobot.datasets.utils import (
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_DATA_FILE_SIZE_IN_MB,
-    DEFAULT_VIDEO_FILE_SIZE_IN_MB,
-)
+from lerobot.datasets.aggregate import aggregate_datasets
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from libero_utils.config import LIBERO_FEATURES
 from libero_utils.libero_utils import load_local_episodes
 from ray.runtime_env import RuntimeEnv
-from tqdm import tqdm
 
 
 def setup_logger():
@@ -73,63 +59,22 @@ class SaveLerobotDataset(PipelineStep):
                 dataset.save_episode()
                 logger.info(f"process done for {dataset.repo_id}, episode {episode_index}, len {len(episode_data)}")
 
+        dataset.finalize()
+
 
 def create_aggr_dataset(raw_dirs: list[Path], aggregated_dir: Path):
-    logger = setup_logger()
-
-    all_metadata = [LeRobotDatasetMetadata("", root=raw_dir) for raw_dir in raw_dirs]
-
-    fps, robot_type, features = validate_all_metadata(all_metadata)
-
     if aggregated_dir.exists():
         shutil.rmtree(aggregated_dir)
 
-    aggr_meta = LeRobotDatasetMetadata.create(
-        repo_id=f"{aggregated_dir.parent.name}/{aggregated_dir.name}",
-        root=aggregated_dir,
-        fps=fps,
-        robot_type=robot_type,
-        features=features,
+    repo_ids = [f"{d.parent.name}/{d.name}" for d in raw_dirs]
+    aggr_repo_id = f"{aggregated_dir.parent.name}/{aggregated_dir.name}"
+
+    aggregate_datasets(
+        repo_ids=repo_ids,
+        aggr_repo_id=aggr_repo_id,
+        roots=raw_dirs,
+        aggr_root=aggregated_dir,
     )
-
-    video_keys = [key for key in features if features[key]["dtype"] == "video"]
-    unique_tasks = pd.concat([m.tasks for m in all_metadata]).index.unique()
-    aggr_meta.tasks = pd.DataFrame({"task_index": range(len(unique_tasks))}, index=unique_tasks)
-
-    meta_idx = {"chunk": 0, "file": 0}
-    data_idx = {"chunk": 0, "file": 0}
-    videos_idx = {key: {"chunk": 0, "file": 0, "latest_duration": 0, "episode_duration": 0} for key in video_keys}
-
-    aggr_meta.episodes = {}
-
-    for src_meta in tqdm(all_metadata, desc="Copy data and videos"):
-        videos_idx = aggregate_videos(
-            src_meta, aggr_meta, videos_idx, DEFAULT_VIDEO_FILE_SIZE_IN_MB, DEFAULT_CHUNK_SIZE
-        )
-        data_idx = aggregate_data(src_meta, aggr_meta, data_idx, DEFAULT_DATA_FILE_SIZE_IN_MB, DEFAULT_CHUNK_SIZE)
-
-        meta_idx = aggregate_metadata(src_meta, aggr_meta, meta_idx, data_idx, videos_idx)
-
-        aggr_meta.info["total_episodes"] += src_meta.total_episodes
-        aggr_meta.info["total_frames"] += src_meta.total_frames
-
-    logger.info("write tasks")
-    write_tasks(aggr_meta.tasks, aggr_meta.root)
-
-    logger.info("write info")
-    aggr_meta.info.update(
-        {
-            "total_tasks": len(aggr_meta.tasks),
-            "total_episodes": sum(m.total_episodes for m in all_metadata),
-            "total_frames": sum(m.total_frames for m in all_metadata),
-            "splits": {"train": f"0:{sum(m.total_episodes for m in all_metadata)}"},
-        }
-    )
-    write_info(aggr_meta.info, aggr_meta.root)
-
-    logger.info("write stats")
-    aggr_meta.stats = aggregate_stats([m.stats for m in all_metadata])
-    write_stats(aggr_meta.stats, aggr_meta.root)
 
 
 def delete_temp_data(temp_dirs: list[Path]):

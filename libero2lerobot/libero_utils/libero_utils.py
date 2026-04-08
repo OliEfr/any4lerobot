@@ -27,6 +27,9 @@ def load_local_episodes(input_h5: Path):
             episode = {
                 "observation.images.image": np.array(demo["obs/agentview_rgb"]),
                 "observation.images.wrist_image": np.array(demo["obs/eye_in_hand_rgb"]),
+                # "observation.images.frontview_image": np.array(demo["obs/frontview_rgb"]),
+                # "observation.images.birdview_image": np.array(demo["obs/birdview_rgb"]),
+                # "observation.images.sideview_image": np.array(demo["obs/sideview_rgb"]),
                 "observation.state": np.array(state, dtype=np.float32),
                 "observation.states.ee_state": np.array(demo["obs/ee_states"], dtype=np.float32),
                 "observation.states.joint_state": np.array(demo["obs/joint_states"], dtype=np.float32),

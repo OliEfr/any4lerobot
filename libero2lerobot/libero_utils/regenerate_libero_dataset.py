@@ -46,7 +46,8 @@ def get_libero_env(task, model_family, resolution=256):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+    # env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand", "frontview", "birdview", "sideview"]}
+    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand"]}
     env = OffScreenRenderEnv(**env_args)
     env.seed(0)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
@@ -92,6 +93,14 @@ def main(args):
     # Prepare JSON file to record success/false and initial states per episode
     metainfo_json_dict = {}
     metainfo_json_out_path = f"./experiments/robot/libero/{args.libero_task_suite}_metainfo.json"
+    metainfo_dir = os.path.dirname(metainfo_json_out_path)
+    os.makedirs(metainfo_dir, exist_ok=True)
+
+    # Create file first if it does not exist
+    if not os.path.exists(metainfo_json_out_path):
+        with open(metainfo_json_out_path, "x") as f:
+            json.dump({}, f)
+
     with open(metainfo_json_out_path, "w") as f:
         # Just test that we can write to this file (we overwrite it later)
         json.dump(metainfo_json_dict, f)
@@ -117,8 +126,13 @@ def main(args):
         orig_data_file = h5py.File(orig_data_path, "r")
         orig_data = orig_data_file["data"]
 
-        # Create new HDF5 file for regenerated demos
+        # Skip task if output file already exists
         new_data_path = os.path.join(args.libero_target_dir, f"{task.name}_demo.hdf5")
+        if os.path.exists(new_data_path):
+            print(f"Skipping task '{task.name}' — output file already exists: {new_data_path}")
+            continue
+
+        # Create new HDF5 file for regenerated demos
         new_data_file = h5py.File(new_data_path, "w")
         grp = new_data_file.create_group("data")
 
@@ -143,6 +157,9 @@ def main(args):
             robot_states = []
             agentview_images = []
             eye_in_hand_images = []
+            frontview_images = []
+            birdview_images = []
+            sideview_images = []
 
             # Replay original demo actions in environment and record observations
             for _, action in enumerate(orig_actions):
@@ -182,6 +199,9 @@ def main(args):
                 )
                 agentview_images.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                 eye_in_hand_images.append(np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]))
+                # frontview_images.append(np.ascontiguousarray(obs["frontview_image"][::-1, ::-1]))
+                # birdview_images.append(np.ascontiguousarray(obs["birdview_image"][::-1, ::-1]))
+                # sideview_images.append(np.ascontiguousarray(obs["sideview_image"][::-1, ::-1]))
 
                 # Execute demo action in environment
                 obs, reward, done, info = env.step(action.tolist())
@@ -203,6 +223,9 @@ def main(args):
                 obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
                 obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
                 obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
+                # obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
+                # obs_grp.create_dataset("birdview_rgb", data=np.stack(birdview_images, axis=0))
+                # obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
                 ep_data_grp.create_dataset("actions", data=actions)
                 ep_data_grp.create_dataset("states", data=np.stack(states))
                 ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
