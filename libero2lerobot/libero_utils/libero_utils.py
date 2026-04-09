@@ -8,15 +8,16 @@ def load_local_episodes(input_h5: Path):
     with File(input_h5, "r") as f:
         for demo in f["data"].values():
             demo_len = len(demo["obs/agentview_rgb"])
-            # (-1: open, 1: close) -> (0: close, 1: open)
             action = np.array(demo["actions"])
-            action = np.concatenate(
-                [
-                    action[:, :6],
-                    (1 - np.clip(action[:, -1], 0, 1))[:, None],
-                ],
-                axis=1,
-            )
+            # NOTE the below transforms the action to [0,1] as originally used by OpenVLA, however we do not require this.
+            # (-1: open, 1: close) -> (0: close, 1: open)
+            # action = np.concatenate(
+            #     [
+            #         action[:, :6],
+            #         (1 - np.clip(action[:, -1], 0, 1))[:, None],
+            #     ],
+            #     axis=1,
+            # )
             state = np.concatenate(
                 [
                     np.array(demo["obs/ee_states"]),
