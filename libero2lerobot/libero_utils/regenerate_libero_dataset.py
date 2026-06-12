@@ -161,6 +161,11 @@ def main(args):
             exit()
     os.makedirs(args.libero_target_dir, exist_ok=True)
 
+    # Failed replays go to a sibling directory with identical file layout, so the same
+    # conversion tooling works on either directory
+    failures_dir = args.libero_target_dir.rstrip("/") + "_failures"
+    os.makedirs(failures_dir, exist_ok=True)
+
     # Prepare JSON file to record success/false and initial states per episode
     metainfo_json_dict = {}
     variant = "" if (args.robot == "Panda" and args.replay_mode == "delta") else f"_{args.robot.lower()}_{args.replay_mode}"
@@ -205,9 +210,12 @@ def main(args):
             print(f"Skipping task '{task.name}' — output file already exists: {new_data_path}")
             continue
 
-        # Create new HDF5 file for regenerated demos
+        # Create new HDF5 files for regenerated demos (successes and failures separately)
         new_data_file = h5py.File(new_data_path, "w")
         grp = new_data_file.create_group("data")
+        failures_data_path = os.path.join(failures_dir, f"{task.name}_demo.hdf5")
+        failures_data_file = h5py.File(failures_data_path, "w")
+        failures_grp = failures_data_file.create_group("data")
 
         num_demos = len(orig_data.keys())
         if args.max_demos_per_task is not None:
@@ -308,32 +316,34 @@ def main(args):
                 # Execute action in environment
                 obs, reward, done, info = env.step(exec_action.tolist())
 
-            # At end of episode, save replayed trajectories to new HDF5 files (only keep successes)
+            # At end of episode, save the replayed trajectory: successes to the main file,
+            # failures to the parallel failures file (reward stays 0 there)
+            dones = np.zeros(len(actions)).astype(np.uint8)
+            dones[-1] = 1
+            rewards = np.zeros(len(actions)).astype(np.uint8)
             if done:
-                dones = np.zeros(len(actions)).astype(np.uint8)
-                dones[-1] = 1
-                rewards = np.zeros(len(actions)).astype(np.uint8)
                 rewards[-1] = 1
-                assert len(actions) == len(ee_states)
+            assert len(actions) == len(ee_states)
 
-                ep_data_grp = grp.create_group(f"demo_{i}")
-                obs_grp = ep_data_grp.create_group("obs")
-                obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
-                obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
-                obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
-                obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
-                obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
-                # obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
-                # obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
-                obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
-                # obs_grp.create_dataset("birdview_rgb", data=np.stack(birdview_images, axis=0))
-                obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
-                ep_data_grp.create_dataset("actions", data=actions)
-                ep_data_grp.create_dataset("states", data=np.stack(states))
-                ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
-                ep_data_grp.create_dataset("rewards", data=rewards)
-                ep_data_grp.create_dataset("dones", data=dones)
+            ep_data_grp = (grp if done else failures_grp).create_group(f"demo_{i}")
+            obs_grp = ep_data_grp.create_group("obs")
+            obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
+            obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
+            obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
+            obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
+            obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
+            # obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
+            # obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
+            obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
+            # obs_grp.create_dataset("birdview_rgb", data=np.stack(birdview_images, axis=0))
+            obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
+            ep_data_grp.create_dataset("actions", data=actions)
+            ep_data_grp.create_dataset("states", data=np.stack(states))
+            ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
+            ep_data_grp.create_dataset("rewards", data=rewards)
+            ep_data_grp.create_dataset("dones", data=dones)
 
+            if done:
                 num_success += 1
 
             num_replays += 1
@@ -361,19 +371,20 @@ def main(args):
             # Report total number of no-op actions filtered out so far
             print(f"  Total # no-op actions filtered out: {num_noops}")
 
-        # Close HDF5 files
+        # Close HDF5 files, dropping any that stayed empty
         orig_data_file.close()
-        if len(new_data_file["data"]) == 0:
-            new_data_file.close()
-            os.remove(new_data_path)
-        else:
-            new_data_file.close()
+        for data_file, data_path in [(new_data_file, new_data_path), (failures_data_file, failures_data_path)]:
+            is_empty = len(data_file["data"]) == 0
+            data_file.close()
+            if is_empty:
+                os.remove(data_path)
         env.close()
         if source_env is not None:
             source_env.close()
         print(f"Saved regenerated demos for task '{task_description}' at: {new_data_path}")
 
     print(f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}")
+    print(f"Saved failed replays at: {failures_dir}")
     print(f"Saved metainfo JSON at: {metainfo_json_out_path}")
 
 
