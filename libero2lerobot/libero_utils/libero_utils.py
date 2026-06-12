@@ -7,7 +7,7 @@ from h5py import File
 def load_local_episodes(input_h5: Path):
     with File(input_h5, "r") as f:
         for demo in f["data"].values():
-            demo_len = len(demo["obs/agentview_rgb"])
+            demo_len = len(demo["obs/ee_states"])
             action = np.array(demo["actions"])
             # NOTE the below transforms the action to [0,1] as originally used by OpenVLA, however we do not require this.
             # (-1: open, 1: close) -> (0: close, 1: open)
@@ -26,11 +26,11 @@ def load_local_episodes(input_h5: Path):
                 axis=1,
             )
             episode = {
-                "observation.images.image": np.array(demo["obs/agentview_rgb"]),
-                "observation.images.wrist_image": np.array(demo["obs/eye_in_hand_rgb"]),
-                # "observation.images.frontview_image": np.array(demo["obs/frontview_rgb"]),
+                # "observation.images.image": np.array(demo["obs/agentview_rgb"]),
+                # "observation.images.wrist_image": np.array(demo["obs/eye_in_hand_rgb"]),
+                "observation.images.frontview_image": np.array(demo["obs/frontview_rgb"]),
                 # "observation.images.birdview_image": np.array(demo["obs/birdview_rgb"]),
-                # "observation.images.sideview_image": np.array(demo["obs/sideview_rgb"]),
+                "observation.images.sideview_image": np.array(demo["obs/sideview_rgb"]),
                 "observation.state": np.array(state, dtype=np.float32),
                 "observation.states.ee_state": np.array(demo["obs/ee_states"], dtype=np.float32),
                 "observation.states.joint_state": np.array(demo["obs/joint_states"], dtype=np.float32),

@@ -46,8 +46,8 @@ def get_libero_env(task, model_family, resolution=256):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
-    # env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand", "frontview", "birdview", "sideview"]}
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand"]}
+    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["frontview", "sideview"]}
+    # env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand"]}
     env = OffScreenRenderEnv(**env_args)
     env.seed(0)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
@@ -165,10 +165,10 @@ def main(args):
             for _, action in enumerate(orig_actions):
                 # Skip transitions with no-op actions
                 prev_action = actions[-1] if len(actions) > 0 else None
-                if is_noop(action, prev_action):
-                    print(f"\tSkipping no-op action: {action}")
-                    num_noops += 1
-                    continue
+                # if is_noop(action, prev_action):
+                #     print(f"\tSkipping no-op action: {action}")
+                #     num_noops += 1
+                #     continue
 
                 if states == []:
                     # In the first timestep, since we're using the original initial state to initialize the environment,
@@ -197,11 +197,11 @@ def main(args):
                         )
                     )
                 )
-                agentview_images.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
-                eye_in_hand_images.append(np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]))
-                # frontview_images.append(np.ascontiguousarray(obs["frontview_image"][::-1, ::-1]))
+                # agentview_images.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
+                # eye_in_hand_images.append(np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]))
+                frontview_images.append(np.ascontiguousarray(obs["frontview_image"][::-1, ::-1]))
                 # birdview_images.append(np.ascontiguousarray(obs["birdview_image"][::-1, ::-1]))
-                # sideview_images.append(np.ascontiguousarray(obs["sideview_image"][::-1, ::-1]))
+                sideview_images.append(np.ascontiguousarray(obs["sideview_image"][::-1, ::-1]))
 
                 # Execute demo action in environment
                 obs, reward, done, info = env.step(action.tolist())
@@ -212,7 +212,7 @@ def main(args):
                 dones[-1] = 1
                 rewards = np.zeros(len(actions)).astype(np.uint8)
                 rewards[-1] = 1
-                assert len(actions) == len(agentview_images)
+                assert len(actions) == len(ee_states)
 
                 ep_data_grp = grp.create_group(f"demo_{i}")
                 obs_grp = ep_data_grp.create_group("obs")
@@ -221,11 +221,11 @@ def main(args):
                 obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
                 obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
                 obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
-                obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
-                obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
-                # obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
+                # obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
+                # obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
+                obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
                 # obs_grp.create_dataset("birdview_rgb", data=np.stack(birdview_images, axis=0))
-                # obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
+                obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
                 ep_data_grp.create_dataset("actions", data=actions)
                 ep_data_grp.create_dataset("states", data=np.stack(states))
                 ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))

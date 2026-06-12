@@ -1,14 +1,4 @@
 LIBERO_FEATURES = {
-    "observation.images.image": {
-        "dtype": "video",
-        "shape": (256, 256, 3),
-        "names": ["height", "width", "rgb"],
-    },
-    "observation.images.wrist_image": {
-        "dtype": "video",
-        "shape": (256, 256, 3),
-        "names": ["height", "width", "rgb"],
-    },
     "observation.state": {
         "dtype": "float32",
         "shape": (8,),
@@ -29,17 +19,27 @@ LIBERO_FEATURES = {
         "shape": (2,),
         "names": {"motors": ["gripper", "gripper"]},
     },
-    # "observation.images.frontview_image": {
+    # "observation.images.image": { # this is agentview
     #     "dtype": "video",
     #     "shape": (256, 256, 3),
     #     "names": ["height", "width", "rgb"],
     # },
+    "observation.images.frontview_image": {
+        "dtype": "video",
+        "shape": (256, 256, 3),
+        "names": ["height", "width", "rgb"],
+    },
     # "observation.images.birdview_image": {
     #     "dtype": "video",
     #     "shape": (256, 256, 3),
     #     "names": ["height", "width", "rgb"],
     # },
-    # "observation.images.sideview_image": {
+    "observation.images.sideview_image": {
+        "dtype": "video",
+        "shape": (256, 256, 3),
+        "names": ["height", "width", "rgb"],
+    },
+    # "observation.images.wrist_image": {
     #     "dtype": "video",
     #     "shape": (256, 256, 3),
     #     "names": ["height", "width", "rgb"],
