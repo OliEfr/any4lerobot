@@ -35,6 +35,11 @@ import robosuite.utils.transform_utils as T
 import tqdm
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
+from libero.libero.envs.env_wrapper import ControlEnv
+
+import custom_robots  # noqa: F401  (registers non-Panda embodiments with robosuite)
+
+ROBOT_JOINT_DIMS = {"Panda": 7, "UR5e": 6, "Kinova3": 7, "IIWA": 7, "Sawyer": 7}
 
 
 def get_libero_dummy_action(model_family: str):
@@ -42,15 +47,81 @@ def get_libero_dummy_action(model_family: str):
     return [0, 0, 0, 0, 0, 0, -1]
 
 
-def get_libero_env(task, model_family, resolution=256):
+def get_libero_env(task, robot, resolution=256):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["frontview", "sideview"]}
+    env_args = {"bddl_file_name": task_bddl_file, "robots": [robot], "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["frontview", "sideview"]}
     # env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand"]}
     env = OffScreenRenderEnv(**env_args)
     env.seed(0)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
+
+
+def get_source_panda_env(task):
+    """State-only Panda env (no rendering) that replays the original demo alongside the target env.
+
+    Provides the Panda's settled initial EEF goal for initializing other embodiments, and the
+    per-step absolute EEF goal actions for --replay_mode absolute.
+    """
+    task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
+    env = ControlEnv(
+        bddl_file_name=task_bddl_file,
+        use_camera_obs=False,
+        has_renderer=False,
+        has_offscreen_renderer=False,
+    )
+    env.seed(0)
+    return env
+
+
+def set_controller_absolute(env, absolute):
+    """Toggle the OSC controller between delta and absolute EEF targets.
+
+    robosuite's OSC controller only reads `use_delta` inside `set_goal`, so flipping it at
+    runtime is equivalent to loading a controller config with control_delta=False. Must be
+    re-applied after env.reset() because hard resets re-create the controller.
+    """
+    env.env.robots[0].controller.use_delta = not absolute
+
+
+def get_eef_goal_action(env, gripper_action):
+    """Absolute OSC_POSE action (pos, axis-angle, gripper) for env's current controller EEF goal."""
+    controller = env.env.robots[0].controller
+    goal_ori = T.quat2axisangle(T.mat2quat(controller.goal_ori))
+    return np.concatenate([controller.goal_pos, goal_ori, [gripper_action]])
+
+
+def drive_to_start_and_splice(env, source_env, orig_state0, n_joints):
+    """Initialize a non-Panda env to match a Panda demo's initial state (Adapt3R's procedure).
+
+    Drives the robot's EEF to the settled Panda's initial EEF goal with absolute OSC actions,
+    then splices a mujoco init state combining the new robot's joint configuration with the
+    demo's gripper + object state. Returns (obs, spliced_init_state).
+    """
+    start_action = get_eef_goal_action(source_env, gripper_action=-1.0)
+    env.reset()
+    set_controller_absolute(env, True)
+    for _ in range(20):
+        env.step(start_action.tolist())
+    set_controller_absolute(env, False)
+
+    # Flattened mujoco state layout: [time(1), robot qpos(n), gripper+object qpos(n_scene),
+    # robot qvel(n), gripper+object qvel(n_scene)]
+    new_state = env.sim.get_state().flatten()
+    n_scene = (len(new_state) - 1) // 2 - n_joints
+    n_joints_orig = (len(orig_state0) - 1) // 2 - n_scene
+    init_state = np.concatenate(
+        [
+            orig_state0[:1],
+            new_state[1 : 1 + n_joints],
+            orig_state0[1 + n_joints_orig : 1 + n_joints_orig + n_scene],
+            np.zeros(n_joints),
+            orig_state0[1 + 2 * n_joints_orig + n_scene :],
+        ]
+    )
+    obs = env.set_init_state(init_state)
+    return obs, init_state
 
 
 def is_noop(action, prev_action=None, threshold=1e-4):
@@ -79,7 +150,7 @@ def is_noop(action, prev_action=None, threshold=1e-4):
 
 
 def main(args):
-    print(f"Regenerating {args.libero_task_suite} dataset!")
+    print(f"Regenerating {args.libero_task_suite} dataset with robot {args.robot} ({args.replay_mode} replay)!")
 
     # Create target directory
     if os.path.isdir(args.libero_target_dir):
@@ -92,7 +163,8 @@ def main(args):
 
     # Prepare JSON file to record success/false and initial states per episode
     metainfo_json_dict = {}
-    metainfo_json_out_path = f"./experiments/robot/libero/{args.libero_task_suite}_metainfo.json"
+    variant = "" if (args.robot == "Panda" and args.replay_mode == "delta") else f"_{args.robot.lower()}_{args.replay_mode}"
+    metainfo_json_out_path = f"./experiments/robot/libero/{args.libero_task_suite}{variant}_metainfo.json"
     metainfo_dir = os.path.dirname(metainfo_json_out_path)
     os.makedirs(metainfo_dir, exist_ok=True)
 
@@ -118,7 +190,8 @@ def main(args):
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         # Get task in suite
         task = task_suite.get_task(task_id)
-        env, task_description = get_libero_env(task, "llava", resolution=args.resolution)
+        env, task_description = get_libero_env(task, args.robot, resolution=args.resolution)
+        source_env = get_source_panda_env(task) if (args.robot != "Panda" or args.replay_mode == "absolute") else None
 
         # Get dataset for task
         orig_data_path = os.path.join(args.libero_raw_data_dir, f"{task.name}_demo.hdf5")
@@ -136,17 +209,33 @@ def main(args):
         new_data_file = h5py.File(new_data_path, "w")
         grp = new_data_file.create_group("data")
 
-        for i in range(len(orig_data.keys())):
+        num_demos = len(orig_data.keys())
+        if args.max_demos_per_task is not None:
+            num_demos = min(num_demos, args.max_demos_per_task)
+        for i in range(num_demos):
             # Get demo data
             demo_data = orig_data[f"demo_{i}"]
             orig_actions = demo_data["actions"][()]
             orig_states = demo_data["states"][()]
 
             # Reset environment, set initial state, and wait a few steps for environment to settle
-            env.reset()
-            env.set_init_state(orig_states[0])
+            if source_env is not None:
+                # Settle the Panda source env at the demo's initial state (its controller then
+                # holds the Panda's initial EEF goal)
+                source_env.reset()
+                source_env.set_init_state(orig_states[0])
+                for _ in range(10):
+                    source_env.step(get_libero_dummy_action("llava"))
+            if args.robot == "Panda":
+                env.reset()
+                env.set_init_state(orig_states[0])
+                init_state = orig_states[0]
+            else:
+                _, init_state = drive_to_start_and_splice(env, source_env, orig_states[0], ROBOT_JOINT_DIMS[args.robot])
             for _ in range(10):
                 obs, reward, done, info = env.step(get_libero_dummy_action("llava"))
+            if args.replay_mode == "absolute":
+                set_controller_absolute(env, True)
 
             # Set up new data lists
             states = []
@@ -165,16 +254,21 @@ def main(args):
             for _, action in enumerate(orig_actions):
                 # Skip transitions with no-op actions
                 prev_action = actions[-1] if len(actions) > 0 else None
-                # if is_noop(action, prev_action):
-                #     print(f"\tSkipping no-op action: {action}")
-                #     num_noops += 1
-                #     continue
+                if is_noop(action, prev_action):
+                    print(f"\tSkipping no-op action: {action}")
+                    num_noops += 1
+                    continue
 
                 if states == []:
-                    # In the first timestep, since we're using the original initial state to initialize the environment,
-                    # copy the initial state (first state in episode) over from the original HDF5 to the new one
-                    states.append(orig_states[0])
-                    robot_states.append(demo_data["robot_states"][0])
+                    # In the first timestep, record the state the environment was initialized with
+                    # (for Panda this is the original demo's first state, copied over as before)
+                    states.append(init_state)
+                    if args.robot == "Panda":
+                        robot_states.append(demo_data["robot_states"][0])
+                    else:
+                        robot_states.append(
+                            np.concatenate([obs["robot0_gripper_qpos"], obs["robot0_eef_pos"], obs["robot0_eef_quat"]])
+                        )
                 else:
                     # For all other timesteps, get state from environment and record it
                     states.append(env.sim.get_state().flatten())
@@ -182,8 +276,16 @@ def main(args):
                         np.concatenate([obs["robot0_gripper_qpos"], obs["robot0_eef_pos"], obs["robot0_eef_quat"]])
                     )
 
-                # Record original action (from demo)
-                actions.append(action)
+                if args.replay_mode == "absolute":
+                    # Mirror the original demo on the Panda source env and command the target
+                    # robot with the Panda controller's absolute EEF goal
+                    source_env.step(action.tolist())
+                    exec_action = get_eef_goal_action(source_env, gripper_action=action[-1])
+                else:
+                    exec_action = action
+
+                # Record executed action (original delta action, or absolute EEF goal action)
+                actions.append(exec_action)
 
                 # Record data returned by environment
                 if "robot0_gripper_qpos" in obs:
@@ -203,8 +305,8 @@ def main(args):
                 # birdview_images.append(np.ascontiguousarray(obs["birdview_image"][::-1, ::-1]))
                 sideview_images.append(np.ascontiguousarray(obs["sideview_image"][::-1, ::-1]))
 
-                # Execute demo action in environment
-                obs, reward, done, info = env.step(action.tolist())
+                # Execute action in environment
+                obs, reward, done, info = env.step(exec_action.tolist())
 
             # At end of episode, save replayed trajectories to new HDF5 files (only keep successes)
             if done:
@@ -244,7 +346,7 @@ def main(args):
             if episode_key not in metainfo_json_dict[task_key]:
                 metainfo_json_dict[task_key][episode_key] = {}
             metainfo_json_dict[task_key][episode_key]["success"] = bool(done)
-            metainfo_json_dict[task_key][episode_key]["initial_state"] = orig_states[0].tolist()
+            metainfo_json_dict[task_key][episode_key]["initial_state"] = init_state.tolist()
 
             # Write metainfo dict to JSON file
             # (We repeatedly overwrite, rather than doing this once at the end, just in case the script crashes midway)
@@ -266,6 +368,9 @@ def main(args):
             os.remove(new_data_path)
         else:
             new_data_file.close()
+        env.close()
+        if source_env is not None:
+            source_env.close()
         print(f"Saved regenerated demos for task '{task_description}' at: {new_data_path}")
 
     print(f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}")
@@ -276,6 +381,27 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--resolution", type=int, default=256, help="Resolution of the images. Example: 256")
+    parser.add_argument(
+        "--robot",
+        type=str,
+        default="Panda",
+        choices=list(ROBOT_JOINT_DIMS.keys()),
+        help="Robot embodiment to replay the demos with. Example: UR5e",
+    )
+    parser.add_argument(
+        "--replay_mode",
+        type=str,
+        default="delta",
+        choices=["delta", "absolute"],
+        help="delta: replay the original EEF delta actions. absolute: track the Panda's EEF goal "
+        "trajectory with absolute OSC_POSE targets (recorded actions are then absolute EEF goals).",
+    )
+    parser.add_argument(
+        "--max_demos_per_task",
+        type=int,
+        default=None,
+        help="Optionally limit the number of demos replayed per task (for quick success-rate estimates).",
+    )
     parser.add_argument(
         "--libero_task_suite",
         type=str,

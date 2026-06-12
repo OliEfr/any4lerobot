@@ -9,7 +9,7 @@ from datatrove.executor import LocalPipelineExecutor, RayPipelineExecutor
 from datatrove.pipeline.base import PipelineStep
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from libero_utils.config import LIBERO_FEATURES
+from libero_utils.config import ROBOT_JOINT_DIMS, get_libero_features
 from libero_utils.libero_utils import load_local_episodes
 from ray.runtime_env import RuntimeEnv
 
@@ -28,9 +28,10 @@ class SaveLerobotDataset(PipelineStep):
     name = "Save Temp LerobotDataset"
     type = "libero2lerobot"
 
-    def __init__(self, tasks: list[tuple[Path, Path, str]]):
+    def __init__(self, tasks: list[tuple[Path, Path, str]], robot_type: str = "franka"):
         super().__init__()
         self.tasks = tasks
+        self.robot_type = robot_type
 
     def run(self, data=None, rank: int = 0, world_size: int = 1):
         logger = setup_logger()
@@ -44,8 +45,8 @@ class SaveLerobotDataset(PipelineStep):
             repo_id=f"{input_h5.parent.name}/{input_h5.name}",
             root=output_path,
             fps=20,
-            robot_type="franka",
-            features=LIBERO_FEATURES,
+            robot_type=self.robot_type,
+            features=get_libero_features(self.robot_type),
         )
 
         logger.info(f"start processing for {input_h5}, saving to {output_path}")
@@ -95,6 +96,7 @@ def main(
     debug: bool = False,
     repo_id: str = None,
     push_to_hub: bool = False,
+    robot_type: str = "franka",
 ):
     tasks = []
     pattern1 = re.compile(r"_SCENE\d+_(.*?)_demo\.hdf5")
@@ -150,7 +152,7 @@ def main(
         **({"cpus_per_task": cpus_per_task, "tasks_per_job": tasks_per_job} if executor is RayPipelineExecutor else {}),
     }
 
-    executor(pipeline=[SaveLerobotDataset(tasks)], **executor_config, logging_dir=resume_dir).run()
+    executor(pipeline=[SaveLerobotDataset(tasks, robot_type)], **executor_config, logging_dir=resume_dir).run()
     create_aggr_dataset([task[1] for task in tasks], aggregate_output_path)
     delete_temp_data([task[1] for task in tasks])
 
@@ -159,7 +161,7 @@ def main(
 
     if push_to_hub:
         assert repo_id is not None
-        tags = ["LeRobot", "libero", "franka"]
+        tags = ["LeRobot", "libero", robot_type]
         tags.extend([src_path.name for src_path in src_paths])
         LeRobotDataset(
             repo_id=repo_id,
@@ -187,6 +189,13 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--repo-id", type=str, help="required when push-to-hub is True")
     parser.add_argument("--push-to-hub", action="store_true", help="upload to hub")
+    parser.add_argument(
+        "--robot-type",
+        type=str,
+        default="franka",
+        choices=list(ROBOT_JOINT_DIMS.keys()),
+        help="robot embodiment the demos were regenerated with (sets dataset metadata and joint feature dims)",
+    )
     args = parser.parse_args()
 
     main(**vars(args))

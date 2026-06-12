@@ -174,3 +174,5 @@ cython_debug/
 
 lerobot_datasets
 libero_datasets*
+# machine-local symlink created by custom_robots/__init__.py
+libero2lerobot/libero_utils/custom_robots/assets/sawyer/obj_meshes
