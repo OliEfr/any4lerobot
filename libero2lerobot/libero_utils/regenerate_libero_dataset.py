@@ -37,6 +37,8 @@ from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 from libero.libero.envs.env_wrapper import ControlEnv
 
+from config import CAMERA_SETS
+
 import custom_robots  # noqa: F401  (registers non-Panda embodiments with robosuite)
 
 ROBOT_JOINT_DIMS = {"Panda": 7, "UR5e": 6, "Kinova3": 7, "IIWA": 7, "Sawyer": 7}
@@ -47,12 +49,12 @@ def get_libero_dummy_action(model_family: str):
     return [0, 0, 0, 0, 0, 0, -1]
 
 
-def get_libero_env(task, robot, resolution=256):
+def get_libero_env(task, robot, resolution=256, cameras="default"):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = os.path.join(get_libero_path("bddl_files"), task.problem_folder, task.bddl_file)
-    env_args = {"bddl_file_name": task_bddl_file, "robots": [robot], "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["agentview", "robot0_eye_in_hand"]}
-    # env_args = {"bddl_file_name": task_bddl_file, "robots": [robot], "camera_heights": resolution, "camera_widths": resolution, "camera_names": ["frontview", "sideview"]}
+    camera_names = [cam.render_cam for cam in CAMERA_SETS[cameras]]
+    env_args = {"bddl_file_name": task_bddl_file, "robots": [robot], "camera_heights": resolution, "camera_widths": resolution, "camera_names": camera_names}
     env = OffScreenRenderEnv(**env_args)
     env.seed(0)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
@@ -188,6 +190,7 @@ def main(args):
     num_tasks_in_suite = task_suite.n_tasks
 
     # Setup
+    cam_specs = CAMERA_SETS[args.cameras]
     num_replays = 0
     num_success = 0
     num_noops = 0
@@ -195,7 +198,7 @@ def main(args):
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         # Get task in suite
         task = task_suite.get_task(task_id)
-        env, task_description = get_libero_env(task, args.robot, resolution=args.resolution)
+        env, task_description = get_libero_env(task, args.robot, resolution=args.resolution, cameras=args.cameras)
         source_env = get_source_panda_env(task) if (args.robot != "Panda" or args.replay_mode == "absolute") else None
 
         # Get dataset for task
@@ -252,11 +255,7 @@ def main(args):
             gripper_states = []
             joint_states = []
             robot_states = []
-            agentview_images = []
-            eye_in_hand_images = []
-            frontview_images = []
-            birdview_images = []
-            sideview_images = []
+            images = {cam.hdf5_rgb_key: [] for cam in cam_specs}
 
             # Replay original demo actions in environment and record observations
             for _, action in enumerate(orig_actions):
@@ -307,11 +306,8 @@ def main(args):
                         )
                     )
                 )
-                agentview_images.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
-                eye_in_hand_images.append(np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]))
-                # frontview_images.append(np.ascontiguousarray(obs["frontview_image"][::-1, ::-1]))
-                # birdview_images.append(np.ascontiguousarray(obs["birdview_image"][::-1, ::-1]))
-                # sideview_images.append(np.ascontiguousarray(obs["sideview_image"][::-1, ::-1]))
+                for cam in cam_specs:
+                    images[cam.hdf5_rgb_key].append(np.ascontiguousarray(obs[cam.obs_image_key][::-1, ::-1]))
 
                 # Execute action in environment
                 obs, reward, done, info = env.step(exec_action.tolist())
@@ -332,11 +328,8 @@ def main(args):
             obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
             obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
             obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
-            obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
-            obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
-            # obs_grp.create_dataset("frontview_rgb", data=np.stack(frontview_images, axis=0))
-            # obs_grp.create_dataset("birdview_rgb", data=np.stack(birdview_images, axis=0))
-            # obs_grp.create_dataset("sideview_rgb", data=np.stack(sideview_images, axis=0))
+            for cam in cam_specs:
+                obs_grp.create_dataset(cam.hdf5_rgb_key, data=np.stack(images[cam.hdf5_rgb_key], axis=0))
             ep_data_grp.create_dataset("actions", data=actions)
             ep_data_grp.create_dataset("states", data=np.stack(states))
             ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
@@ -406,6 +399,13 @@ if __name__ == "__main__":
         choices=["delta", "absolute"],
         help="delta: replay the original EEF delta actions. absolute: track the Panda's EEF goal "
         "trajectory with absolute OSC_POSE targets (recorded actions are then absolute EEF goals).",
+    )
+    parser.add_argument(
+        "--cameras",
+        type=str,
+        default="default",
+        choices=list(CAMERA_SETS.keys()),
+        help="Camera set to render. default: agentview + robot0_eye_in_hand; additional: frontview + sideview.",
     )
     parser.add_argument(
         "--max_demos_per_task",

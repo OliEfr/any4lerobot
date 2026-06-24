@@ -28,10 +28,12 @@ export HDF5_USE_FILE_LOCKING=FALSE
 ROBOTS=(UR5e Kinova3 IIWA Sawyer)
 SMALL_SUITES=(libero_object libero_spatial libero_goal libero_10)
 
-# Camera-view tag appended to every regen dir, LeRobot dir, and hub repo name.
-# _additionalCams = frontview+sideview; _defaultCams = agentview+robot0_eye_in_hand.
-# Must match the camera set currently active in regenerate_libero_dataset.py / config.py / libero_utils.py.
-CAMSUFFIX="_defaultCams"
+# Camera set, selected at runtime via the --cameras flag (no more source editing).
+#   default    = agentview + robot0_eye_in_hand
+#   additional = frontview + sideview
+# CAMSUFFIX is derived from it and appended to every regen dir, LeRobot dir, and hub repo name.
+CAMERAS="${CAMERAS:-default}"
+CAMSUFFIX="_${CAMERAS}Cams"
 
 log() { echo "[$(date +%F_%T)] $*"; }
 
@@ -51,6 +53,7 @@ regen() { # args: robot suite tag
         --libero_task_suite "$2" \
         --robot "$1" \
         --replay_mode delta \
+        --cameras "$CAMERAS" \
         --libero_raw_data_dir "$BASE/libero_datasets/$2" \
         --libero_target_dir "$BASE/libero_datasets_regenerated/${3}${CAMSUFFIX}" \
         </dev/null >"$LOGDIR/${3}_regen.log" 2>&1
@@ -61,6 +64,7 @@ convert_push() { # args: src_dir repo_id robot_lc logfile
         --src-paths "$1" \
         --output-path "$BASE/lerobot_datasets" \
         --robot-type "$3" \
+        --cameras "$CAMERAS" \
         --executor local \
         --tasks-per-job 3 \
         --workers 30 \

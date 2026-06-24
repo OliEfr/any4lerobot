@@ -3,8 +3,11 @@ from pathlib import Path
 import numpy as np
 from h5py import File
 
+from libero_utils.config import CAMERA_SETS
 
-def load_local_episodes(input_h5: Path):
+
+def load_local_episodes(input_h5: Path, cameras: str = "default"):
+    cam_specs = CAMERA_SETS[cameras]
     with File(input_h5, "r") as f:
         for demo in f["data"].values():
             demo_len = len(demo["obs/ee_states"])
@@ -26,15 +29,12 @@ def load_local_episodes(input_h5: Path):
                 axis=1,
             )
             episode = {
-                "observation.images.image": np.array(demo["obs/agentview_rgb"]),
-                "observation.images.wrist_image": np.array(demo["obs/eye_in_hand_rgb"]),
-                # "observation.images.frontview_image": np.array(demo["obs/frontview_rgb"]),
-                # "observation.images.birdview_image": np.array(demo["obs/birdview_rgb"]),
-                # "observation.images.sideview_image": np.array(demo["obs/sideview_rgb"]),
                 "observation.state": np.array(state, dtype=np.float32),
                 "observation.states.ee_state": np.array(demo["obs/ee_states"], dtype=np.float32),
                 "observation.states.joint_state": np.array(demo["obs/joint_states"], dtype=np.float32),
                 "observation.states.gripper_state": np.array(demo["obs/gripper_states"], dtype=np.float32),
                 "action": np.array(action, dtype=np.float32),
             }
+            for cam in cam_specs:
+                episode[cam.lerobot_feature_key] = np.array(demo[f"obs/{cam.hdf5_rgb_key}"])
             yield [{**{k: v[i] for k, v in episode.items()}} for i in range(demo_len)]

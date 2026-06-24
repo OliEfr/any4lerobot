@@ -9,7 +9,7 @@ from datatrove.executor import LocalPipelineExecutor, RayPipelineExecutor
 from datatrove.pipeline.base import PipelineStep
 from lerobot.datasets.aggregate import aggregate_datasets
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from libero_utils.config import ROBOT_JOINT_DIMS, get_libero_features
+from libero_utils.config import CAMERA_SETS, ROBOT_JOINT_DIMS, get_libero_features
 from libero_utils.libero_utils import load_local_episodes
 from ray.runtime_env import RuntimeEnv
 
@@ -28,10 +28,11 @@ class SaveLerobotDataset(PipelineStep):
     name = "Save Temp LerobotDataset"
     type = "libero2lerobot"
 
-    def __init__(self, tasks: list[tuple[Path, Path, str]], robot_type: str = "franka"):
+    def __init__(self, tasks: list[tuple[Path, Path, str]], robot_type: str = "franka", cameras: str = "default"):
         super().__init__()
         self.tasks = tasks
         self.robot_type = robot_type
+        self.cameras = cameras
 
     def run(self, data=None, rank: int = 0, world_size: int = 1):
         logger = setup_logger()
@@ -46,12 +47,12 @@ class SaveLerobotDataset(PipelineStep):
             root=output_path,
             fps=20,
             robot_type=self.robot_type,
-            features=get_libero_features(self.robot_type),
+            features=get_libero_features(self.robot_type, self.cameras),
         )
 
         logger.info(f"start processing for {input_h5}, saving to {output_path}")
 
-        raw_dataset = load_local_episodes(input_h5)
+        raw_dataset = load_local_episodes(input_h5, self.cameras)
         for episode_index, episode_data in enumerate(raw_dataset):
             with self.track_time("saving episode"):
                 for frame_data in episode_data:
@@ -97,6 +98,7 @@ def main(
     repo_id: str = None,
     push_to_hub: bool = False,
     robot_type: str = "franka",
+    cameras: str = "default",
 ):
     tasks = []
     pattern1 = re.compile(r"_SCENE\d+_(.*?)_demo\.hdf5")
@@ -152,7 +154,9 @@ def main(
         **({"cpus_per_task": cpus_per_task, "tasks_per_job": tasks_per_job} if executor is RayPipelineExecutor else {}),
     }
 
-    executor(pipeline=[SaveLerobotDataset(tasks, robot_type)], **executor_config, logging_dir=resume_dir).run()
+    executor(
+        pipeline=[SaveLerobotDataset(tasks, robot_type, cameras)], **executor_config, logging_dir=resume_dir
+    ).run()
     create_aggr_dataset([task[1] for task in tasks], aggregate_output_path)
     delete_temp_data([task[1] for task in tasks])
 
@@ -195,6 +199,14 @@ if __name__ == "__main__":
         default="franka",
         choices=list(ROBOT_JOINT_DIMS.keys()),
         help="robot embodiment the demos were regenerated with (sets dataset metadata and joint feature dims)",
+    )
+    parser.add_argument(
+        "--cameras",
+        type=str,
+        default="default",
+        choices=list(CAMERA_SETS.keys()),
+        help="Camera set the demos were regenerated with; must match the regeneration. "
+        "default: agentview + wrist; additional: frontview + sideview.",
     )
     args = parser.parse_args()
 
